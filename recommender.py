@@ -1,75 +1,61 @@
 import pandas as pd
 import ast
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
+# Load raw CSVs and merge them
 def load_data():
-
     movies = pd.read_csv('data/tmdb_5000_movies.csv')
     credits = pd.read_csv('data/tmdb_5000_credits.csv')
+    return movies.merge(credits, on='title')
 
-    print("Movies dataset shape: ", movies.shape)
-    print("Credits dataset shape: ", credits.shape)
+# Clean and extract relevant fields
+def clean_data(df):
+    df = df[['movie_id', 'title', 'overview', 'genres', 'keywords', 'cast', 'crew']]
+    df.dropna(inplace=True)
 
-    merged = movies.merge(credits, left_on='title', right_on='title')
+    def parse_genres(obj):
+        return [item['name'] for item in ast.literal_eval(obj)]
 
-    print("Merged dataset shape: ", merged.shape)
-    print("Sample columns: ", merged.columns.tolist())
-    print("Sample row: ", merged.iloc[0])
+    def parse_keywords(obj):
+        return [item['name'] for item in ast.literal_eval(obj)]
 
-    return merged
+    def parse_cast(obj):
+        return [item['name'] for item in ast.literal_eval(obj)][:3]
 
-def preprocess_data(movie_df, credits_df):
+    def parse_crew(obj):
+        for item in ast.literal_eval(obj):
+            if item['job'] == 'Director':
+                return [item['name']]
+        return []
 
-    movies_df = movies_df.merge(credits_df, on='title')
+    df['genres'] = df['genres'].apply(parse_genres)
+    df['keywords'] = df['keywords'].apply(parse_keywords)
+    df['cast'] = df['cast'].apply(parse_cast)
+    df['crew'] = df['crew'].apply(parse_crew)
 
-    movies_df = movies_df[['movie_id', 'title', 'overview', 'genres', 'keywords', 'cast', 'crew']]
+    return df
 
-    movies_df.dropna(inplace=True)
+# Create unified tags field
+def create_tags_column(df):
+    df['overview'] = df['overview'].apply(lambda x: x.split())
+    df['tags'] = df['overview'] + df['genres'] + df['keywords'] + df['cast'] + df['crew']
+    df['tags'] = df['tags'].apply(lambda x: " ".join(x).lower())
+    return df[['movie_id', 'title', 'tags']]
 
+# Vectorize tags
+def vectorize_tags(df, max_features=5000):
+    cv = CountVectorizer(max_features=max_features, stop_words='english')
+    vectors = cv.fit_transform(df['tags']).toarray()
+    return vectors, cv
 
-    def parse(obj_str):
-        try:
-            return [item['name'] for item in ast.literal_eval(obj_str)]
-        except:
-            return []
-        
-    movies_df['genres'] = movies_df['genres'].apply(parse)
-    movies_df['keywords'] = movies_df['keywords'].apply(parse)
+# Recommendation logic
+def recommend(movie_title, df, vectors):
+    if movie_title not in df['title'].values:
+        return []
 
-    def extract_top_actors(cast_str):
-        try:
-            cast = ast.literal_eval(cast_str)
-            return [actor['name'] for actor in cast[:3]]
-        except:
-            return []
-        
-    movies_df['cast'] = movies_df['cast'].apply(extract_top_actors)
+    index = df[df['title'] == movie_title].index[0]
+    distances = cosine_similarity(vectors[index].reshape(1, -1), vectors).flatten()
 
-
-    def get_director(crew_str):
-        try:
-            crew = ast.literal_eval(crew_str)
-            for person in crew:
-                if person['job'] == 'Director':
-                    return [person['name']]
-            return []
-        except:
-            return []
-        
-    movies_df['director'] = movies_df['crew'].apply(get_director)
-
-
-    movies_df['overview'] = movies_df['overview'].apply(lambda x: x.split())
-    movies_df['tags'] = movies_df['overview'] + movies_df['genres'] + movies_df['keywords'] + movies_df['cast'] + movies_df['crew']
-    movies_df['tags'] = movies_df['tags'].apply(lambda x: " ".join(x).lower())
-
-    final_df = movies_df[['movie_id', 'title', 'tags']]
-
-
-    return final_df
-
-
-if __name__ == '__main__':
-    from load_data import load_data  # Assuming you saved it in a separate file; otherwise remove this line
-    movies_df, credits_df = load_data() 
-    final_df = preprocess_data(movies_df, credits_df)
-    print(final_df.head(5))
+    similar_indices = distances.argsort()[::-1][1:6]
+    return df.iloc[similar_indices]['title'].values.tolist()

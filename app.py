@@ -1,17 +1,40 @@
 import streamlit as st
-import pandas as pd
+from recommender import load_data, clean_data, create_tags_column, recommend
+from sklearn.feature_extraction.text import CountVectorizer
 
-from recommender import load_data
-from preprocessor import clean_data
+# Page config
+st.set_page_config(page_title="Movie Mind", layout="centered")
 
-st.title("🎬 Movie Mind")
+# Title
+st.title("🎬 Movie Mind - Your Movie Recommendation Buddy")
 
-# Load and clean the movie data
-with st.spinner("Loading and cleaning data..."):
-    movies = load_data()
-    movies = clean_data(movies)
+# Load and process data
+df = load_data()
+df = clean_data(df)
+df = create_tags_column(df)
 
-# Display the shape and a few sample rows
-st.subheader("📊 Cleaned Movie Dataset")
-st.write(f"Shape: {movies.shape}")
-st.dataframe(movies.head())
+# Vectorization
+cv = CountVectorizer(max_features=5000, stop_words='english')
+vectors = cv.fit_transform(df['tags']).toarray()
+
+# --- Movie Search Input ---
+search_query = st.text_input("🔎 Search for a movie you like", "")
+
+# --- Auto-Suggest Matching Titles ---
+matching_titles = df[df['title'].str.contains(search_query, case=False, na=False)]['title'].tolist()
+
+if search_query:
+    if matching_titles:
+        selected_movie = st.selectbox("🎯 Select from suggestions", matching_titles)
+
+        if st.button("🎬 Recommend Similar Movies"):
+            recommendations = recommend(selected_movie, df, vectors)
+
+            if recommendations:
+                st.subheader("📌 Top 5 Recommendations:")
+                for i, title in enumerate(recommendations, 1):
+                    st.markdown(f"{i}. {title}")
+            else:
+                st.warning("No recommendations found. Try a different movie.")
+    else:
+        st.warning("⚠️ No matching titles found.")
